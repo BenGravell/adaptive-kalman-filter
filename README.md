@@ -1,4 +1,4 @@
-# adaptive_kalman_filter
+# Adaptive Kalman filter
 
 The code in this repository implements the adaptive Kalman filter for systems with unknown process and measurement noise covariance.
 
