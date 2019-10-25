@@ -46,11 +46,12 @@ def adaptive_kalman_filter(noise_estimation_method):
                     R_est_new, L = noise_covariance_estimation(y_new, y_old, L, k)
                     if R_est_new > 0:
                         R_est = R_est_new
-                R_est_history[i,k] = R_est
+
             elif noise_estimation_method == "static":
                 R_est = R_est0
             elif noise_estimation_method == "true":
                 R_est = R
+            R_est_history[i,k] = R_est
             x_post, P_post = state_estimation(y_new, x_post, P_post, R_est)
             x_post_history[i,k] = x_post
             x_true_history[i,k] = x
