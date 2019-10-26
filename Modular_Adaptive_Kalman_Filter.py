@@ -122,15 +122,13 @@ class Adaptive_Kalman_Filter():
     def PerformLeastSquaresEstimation(self, leastSquaresInput):
         """
         Performs Least Squares Estimation with input data provided and returns 
-        the least squares estimate
-        Input Parameters:
-        leastSquaresInput: measurements, sensor matrix, covarianceSelect flag
+        the least squares estimate        
         """
         
         # Unpack the leastSquaresInput        
-        kronA                = leastSquaresInput[0]
-        kronB                = leastSquaresInput[1]
-        L                    = leastSquaresInput[2]        
+        kronA = leastSquaresInput[0]
+        kronB = leastSquaresInput[1]
+        L     = leastSquaresInput[2]        
         
         # Unpack the required dynamicsData
         Q   = self.dynamicsData[2]
@@ -140,22 +138,22 @@ class Adaptive_Kalman_Filter():
         ell = self.dynamicsData[8]        
         
         if self.covSelectFlag == 1: # Estimate both Unknown Q and R            
-            S = np.hstack([kronA,kronB]) 
-            vecTheta = mdot(la.pinv(S),vec(L))
-            vecQ_est = vecTheta[0:ell**2]
-            vecR_est = vecTheta[ell**2:]
+            S         = np.hstack([kronA,kronB]) 
+            vecTheta  = mdot(la.pinv(S),vec(L))
+            vecQ_est  = vecTheta[0:ell**2]
+            vecR_est  = vecTheta[ell**2:]
             Q_est_new = np.reshape(vecQ_est,[n,n])
             R_est_new = np.reshape(vecR_est,[m,m])            
         elif self.covSelectFlag == 2: # Estimate Unknown R alone - Q is already known            
-            S = np.copy(kronB)
-            vecCW = mdot(kronA,vec(Q))
-            vecR_est = mdot(la.pinv(S),vec(L)-vecCW)
+            S         = np.copy(kronB)
+            vecCW      = mdot(kronA,vec(Q))
+            vecR_est  = mdot(la.pinv(S),vec(L)-vecCW)
             R_est_new = np.reshape(vecR_est,[m,m])
             Q_est_new = np.copy(Q)            
         elif self.covSelectFlag == 3: # Estimate  Unknown Q alone - R is already known                
-            S = np.copy(kronA)
-            vecCV = mdot(kronB,vec(R))
-            vecQ_est = mdot(la.pinv(S),vec(L)-vecCV)
+            S         = np.copy(kronA)
+            vecCV     = mdot(kronB,vec(R))
+            vecQ_est  = mdot(la.pinv(S),vec(L)-vecCV)
             Q_est_new = np.reshape(vecQ_est,[n,n])
             R_est_new = np.copy(R)
             
