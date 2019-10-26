@@ -75,7 +75,7 @@ if __name__ == "__main__":
     x_hist[0] = x
     x_post_hist[0] = x_post
     P_post_hist[0] = P_post
-    estimateQ = False
+    estimateQ = True
     estimateR = True
 
     # Dynamic adaptive Kalman filter updates  
