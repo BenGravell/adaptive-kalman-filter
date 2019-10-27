@@ -1,185 +1,173 @@
 import numpy as np
 import numpy.linalg as la
 import numpy.random as npr
-from matrixmath import is_pos_def,vec,mdot,specrad,sympart,minsv,solveb
+from matrixmath import is_pos_def,vec,mdot,solveb
 import matplotlib.pyplot as plt
+from namedlist import namedlist
+from copy import copy
 
-###############################################################################
-###############################################################################
+DynamicsDataInput  = namedlist("DynamicsDataInput", "F H Q R")
+InitialCondition   = namedlist("InitialCondition", "x_mean0 x_covr0")
+UnknownParams      = namedlist("UnknownParams", "Q, R")
+LeastSquaresInput  = namedlist("LeastSquaresInput", "kronA kronB L")
+LeastSquaresOutput = namedlist("LeastSquaresOutput", "Q_est R_est")
 
-class Adaptive_Kalman_Filter():
+def example_system():
+    # LTI system dynamics
+    F = np.array([[0.8, 0.2, 0.0],
+                  [0.3, 0.5, 0.0],
+                  [0.1, 0.9, 0.7]])    
+    H = np.array([[1,0,1],
+                  [0,1,0]])    
+    Q = np.array([[3.0, 0.2, 0.0],
+                  [0.2, 2.0, 0.0],
+                  [0.0, 0.0, 7.5]]) 
+    R = np.array([[5,0],
+                  [0,4]]) 
+    
+    # Initial state mean and covariance estimates
+    x_mean0 = np.zeros(3)
+    x_covr0 = np.eye(3)
+    
+    return DynamicsDataInput(F,H,Q,R), InitialCondition(x_mean0,x_covr0)
+
+
+class AdaptiveKalmanFilter():
     """
     Class representing operations & data needed to perform adaptive KF updates
     """ 
     
-    def __init__(self, maxIter, covarianceSelectFlag):
+    def __init__(self, dynamics_data_input, initial_condition, unknown_params, max_iter):
         """
         Constructor function that initializes simulation data
         Input Parameters:
-        maxIter             : Number of maximum filter iterations
+        max_iter             : Number of maximum filter iterations
         covarianceSelectFlag: Flag to estimate Q or R or both        
         """
-        self.T             = maxIter 
-        self.covSelectFlag = covarianceSelectFlag
-        
-        
-    ###########################################################################
-        
-    def GetDynamicsData(self):
-        """
-        Loads the System Dynamics data into the class object
-        """
-        # System model parameters    
-        F = np.array([[0.8, 0.2, 0.0],
-                      [0.3, 0.5, 0.0],
-                      [0.1, 0.9, 0.7]])    
-        H = np.array([[1,0,1],
-                      [0,1,0]])    
-        Q = np.array([[3.0, 0.2, 0.0],
-                      [0.2, 2.0, 0.0],
-                      [0.0, 0.0, 7.5]]) 
-        R = np.array([[5,0],
-                      [0,4]])    
-        
-        n = F.shape[0]
-        m = H.shape[0]   
-        
-        # Initial state mean and covariance estimates
-        x_mean0 = np.zeros(n)
-        x_covr0 = np.eye(n)
-        
-        # Form the dynamicsData list 
-        self.dynamicsData = [F,H,Q,R,n,m,x_mean0,x_covr0]   
-        
-        # Check Observability and update the dynamicsData with ell
-        self.CheckObservability()
-        
-        # Get the buffer size
-        self.GetBufferSize()
-        
-        # Updated dynamicsData is [F,H,Q,R,n,m,x_mean0,x_covr0,ell,p,Mopi]   
-            
-    ###########################################################################
+        self.F, self.H, self.Q, self.R = dynamics_data_input
+        self.n = self.F.shape[0]
+        self.m = self.H.shape[0]        
+        self.x_mean0, self.x_covr0 = initial_condition
+        self.ell = self.check_observability()
+        self.p, self.Mopi = self.get_buffer_size()    
+        self.max_iter = max_iter 
+        self.unknown_params = unknown_params
+                    
     
-    def GetObservabilityMatrix(self, p):
+    def obsvp(self, p):
         """
         Returns a p-step observability matrix
         Input Parameters:
         p: Dimension of the required observability matrix
         """
-        F = self.dynamicsData[0]
-        H = self.dynamicsData[1]
-        n = self.dynamicsData[4]
-        m = self.dynamicsData[5] 
-        # Initialize the observability matrix
-        observabilityMatrix = np.zeros([m*p,n])
-        observabilityMatrix[0:m] = np.copy(H)
-        for k in range(1,p):
-            observabilityMatrix[m*k:m*(k+1)] = mdot(observabilityMatrix[m*(k-1):m*k],F)
-        return observabilityMatrix
-    
-    ###########################################################################
+        F = self.F
+        H = self.H
+        n = self.n
+        m = self.m
         
-    def CheckObservability(self):
+        # Build the observability matrix
+        O = np.zeros([m*p,n])
+        O[0:m] = np.copy(H)
+        for k in range(1,p):
+            O[m*k:m*(k+1)] = mdot(O[m*(k-1):m*k],F)
+        return O
+    
+        
+    def check_observability(self):
         """
         Checks the observability criterion for system matrices F, H and throws
         an error if system is not observable.
         """        
-        n = self.dynamicsData[4]
-        # Get the Observability Matrix
-        observabilityMatrix = self.GetObservabilityMatrix(n)
-        # Check its rank
-        observable = la.matrix_rank(observabilityMatrix) == n
-        # if not observable - throw an error
+        
+        n = self.n
+        O = self.obsvp(n)
+        observable = la.matrix_rank(O) == n        
         if observable:
-            # Set ell = n
-            self.dynamicsData.append(n)            
+            ell = copy(self.n)         
         else:
+            # TODO: generalize to the detectable case
             raise Exception("System is not observable, reformulate")
-            
-    ###########################################################################
+        return ell
+
     
-    def GetBufferSize(self):
+    def get_buffer_size(self):
         """
         Returns the size of the measurement history buffer & corresponding 
         observability matrix
         """
-        n = self.dynamicsData[4]
+        
+        n = self.n
         Mo = 0
         p = 0
         while not la.matrix_rank(Mo) == n: # valid only if system is observable
             p += 1
-            Mo = self.GetObservabilityMatrix(p)
-        # Compute the inverse of Mo
+            Mo = self.obsvp(p)
+        # Compute the pseudoinverse of Mo
         Mopi = la.pinv(Mo)
+        return p, Mopi
         
-        # Update the dynamicsData with p, Mopi
-        self.dynamicsData.append(p)        
-        self.dynamicsData.append(Mopi)
-        
-    ###########################################################################
     
-    def PerformLeastSquaresEstimation(self, leastSquaresInput):
+    def lse(self, least_squares_input):
         """
         Performs Least Squares Estimation with input data provided and returns 
         the least squares estimate        
         """
         
-        # Unpack the leastSquaresInput        
-        kronA = leastSquaresInput[0]
-        kronB = leastSquaresInput[1]
-        L     = leastSquaresInput[2]        
+        # Unpack the least_squares_input        
+        kronA = least_squares_input.kronA
+        kronB = least_squares_input.kronB
+        L     = least_squares_input.L     
         
-        # Unpack the required dynamicsData
-        Q   = self.dynamicsData[2]
-        R   = self.dynamicsData[3]
-        n   = self.dynamicsData[4]
-        m   = self.dynamicsData[5]
-        ell = self.dynamicsData[8]        
+        # Unpack the required dynamics_data
+        Q   = self.Q
+        R   = self.R
+        n   = self.n
+        m   = self.m
+        ell = self.ell
         
-        if self.covSelectFlag == 1: # Estimate both Unknown Q and R            
+        Q_est = np.copy(Q) 
+        R_est = np.copy(R)
+        
+        if self.unknown_params.Q and self.unknown_params.R:         
             S         = np.hstack([kronA,kronB]) 
             vecTheta  = mdot(la.pinv(S),vec(L))
             vecQ_est  = vecTheta[0:ell**2]
             vecR_est  = vecTheta[ell**2:]
-            Q_est_new = np.reshape(vecQ_est,[n,n])
-            R_est_new = np.reshape(vecR_est,[m,m])            
-        elif self.covSelectFlag == 2: # Estimate Unknown R alone - Q is already known            
+            Q_est = np.reshape(vecQ_est,[n,n])
+            R_est = np.reshape(vecR_est,[m,m])            
+        elif not self.unknown_params.Q and self.unknown_params.R:            
             S         = np.copy(kronB)
-            vecCW      = mdot(kronA,vec(Q))
+            vecCW     = mdot(kronA,vec(Q))
             vecR_est  = mdot(la.pinv(S),vec(L)-vecCW)
-            R_est_new = np.reshape(vecR_est,[m,m])
-            Q_est_new = np.copy(Q)            
-        elif self.covSelectFlag == 3: # Estimate  Unknown Q alone - R is already known                
+            R_est = np.reshape(vecR_est,[m,m])
+        elif self.unknown_params.Q and not self.unknown_params.R:             
             S         = np.copy(kronA)
             vecCV     = mdot(kronB,vec(R))
             vecQ_est  = mdot(la.pinv(S),vec(L)-vecCV)
-            Q_est_new = np.reshape(vecQ_est,[n,n])
-            R_est_new = np.copy(R)
+            Q_est = np.reshape(vecQ_est,[n,n])
             
-        # Pack the output data and return it
-        leastSquaresOutput = [Q_est_new, R_est_new]            
-        return leastSquaresOutput
+        return LeastSquaresOutput(Q_est, R_est) 
     
-    ###########################################################################
     
-    def AdaptiveKalmanFilterIteration(self):
+    def run(self):
         """
-        Initializes data structures for Adaptive Kalman Filter iterations
+        Perform adaptive Kalman filter iterations
         """
-        T    = self.T
-        F    = self.dynamicsData[0]
-        H    = self.dynamicsData[1]
-        Q    = self.dynamicsData[2]
-        R    = self.dynamicsData[3]
-        n    = self.dynamicsData[4]
-        m    = self.dynamicsData[5]        
-        ell  = self.dynamicsData[8]
-        p    = self.dynamicsData[9]        
-        Mopi = self.dynamicsData[10]
         
-        # Define the data structures
+        T       = self.max_iter
+        F       = self.F
+        H       = self.H
+        Q       = self.Q
+        R       = self.R
+        n       = self.n
+        m       = self.m        
+        ell     = self.ell
+        p       = self.p       
+        Mopi    = self.Mopi
+        x_mean0 = self.x_mean0
+        x_covr0 = self.x_covr0
         
+        # Preallocate history data arrays        
         x_hist      = np.full((T+1,n),np.nan)
         y_hist      = np.full((T+1,m),np.nan)
         x_pre_hist  = np.full((T+1,n),np.nan)
@@ -191,19 +179,18 @@ class Adaptive_Kalman_Filter():
         R_est_hist  = np.full((T+1,m,m),np.nan)
         
         # Initialize the iterates
-        x_post         = self.dynamicsData[6] # x_mean0
+        x_post         = x_mean0
         P_post         = 100*np.eye(n)
         Q_est          = 20*np.eye(n)
         R_est          = 10*np.eye(m)
         L              = np.zeros([n,n]) 
-        x              = npr.multivariate_normal(self.dynamicsData[6],self.dynamicsData[7]) # (x_mean0, x_covr0)           
+        x              = npr.multivariate_normal(x_mean0,x_covr0)          
         x_hist[0]      = x
         x_post_hist[0] = x_post
         P_post_hist[0] = P_post
         
-        # Dynamic adaptive Kalman filter updates  
-        for k in range(T):  
-            
+        # Perform dynamic adaptive Kalman filter updates  
+        for k in range(T):              
             # Print the iteration number
             print("k = %9d / %d"%(k+1,T))
             
@@ -217,8 +204,7 @@ class Adaptive_Kalman_Filter():
             y_hist[k] = y
             
             # Noise covariance estimation
-            if k > p-1:
-                
+            if k > p-1:                
                 # Collect measurement till 'k-1' time steps
                 Yold = vec(y_hist[np.arange(k-1,k-p-1,-1)].T)
                 
@@ -264,7 +250,7 @@ class Adaptive_Kalman_Filter():
                         Ai[i] = Alr[:,ell*i:ell*(i+1)]
                     Bi[i] = Blr[:,m*i:m*(i+1)] 
                 
-                # Kron the A_i's and B_i's
+                # Form Kronecker producs of the A_i's and B_i's
                 kronA = np.zeros([ell**2,ell**2])
                 kronB = np.zeros([ell**2,m**2])            
                 for i in range(p+1):
@@ -273,14 +259,14 @@ class Adaptive_Kalman_Filter():
                     kronB += np.kron(Bi[i],Bi[i])
                     
                 # Pack the data required for least squares estimation
-                leastSquaresInput = [kronA, kronB, L]
+                least_squares_input = LeastSquaresInput(kronA, kronB, L)
                 
                 # Get the Least Squares estimate of selected covariances
-                leastSquaresOutput = self.PerformLeastSquaresEstimation(leastSquaresInput)
+                least_squares_output = self.lse(least_squares_input)
                 
-                # Unpack the leastSquaresOutput
-                Q_est_new = leastSquaresOutput[0]
-                R_est_new = leastSquaresOutput[1]
+                # Unpack the least_squares_output
+                Q_est_new = least_squares_output.Q_est
+                R_est_new = least_squares_output.R_est
                 
                 # Check positive semidefiniteness of estimated covariances
                 if is_pos_def(Q_est_new):
@@ -288,16 +274,11 @@ class Adaptive_Kalman_Filter():
                 if is_pos_def(R_est_new):
                     R_est = np.copy(R_est_new)
                 
-                # Update the covariance estimate history
-                Q_est_hist[k] = Q_est
-                R_est_hist[k] = R_est
-                
-            else:                
-                # If k <= p - 1
-                Q_est_hist[k] = Q_est
-                R_est_hist[k] = R_est
+            # Update the covariance estimate history
+            Q_est_hist[k] = Q_est
+            R_est_hist[k] = R_est
                           
-            ## Update using Standard Kalman filter equations
+            ## Update using standard Kalman filter equations
             # Calculate the a priori state estimate
             x_pre  = mdot(F,x_post)
             # Calculate the a priori error covariance estimate
@@ -317,7 +298,7 @@ class Adaptive_Kalman_Filter():
             P_post_hist[k+1] = P_post
             K_hist[k+1]      = K
                             
-            ## True System updates (true state transition and measurement)
+            ## True system updates (true state transition and measurement)
             # Generate the process noise
             w = npr.multivariate_normal(np.zeros(n),Q)
             # State update equation
@@ -334,22 +315,21 @@ class Adaptive_Kalman_Filter():
         R_est_hist[-1] = R_est 
         
         # Set the plot parameters
-        self.plotParams = [Q, R, Q_est_hist, R_est_hist, x_hist, x_pre_hist, x_post_hist, P_pre_hist, P_post_hist]
+        self.plot_params = [Q, R, Q_est_hist, R_est_hist, x_hist, x_pre_hist, x_post_hist, P_pre_hist, P_post_hist]
         
-    ###########################################################################
     
-    def PlotData(self):
+    def plot_data(self):
         """
-        Plots the Difference of estimated and true covariance matrices
+        Plots the difference of estimated and true covariance matrices
         to visualize the adaptive KF convergence        
         """
         # Get the required plotting data
-        T           = self.T
+        T           = self.max_iter
         k_hist      = np.arange(T+1) 
-        Q           = self.plotParams[0]
-        R           = self.plotParams[1]
-        Q_est_hist  = self.plotParams[2]
-        R_est_hist  = self.plotParams[3]
+        Q           = self.plot_params[0]
+        R           = self.plot_params[1]
+        Q_est_hist  = self.plot_params[2]
+        R_est_hist  = self.plot_params[3]
         
         
         # Plot convergence of estimated covariances to their true covariances
@@ -365,11 +345,11 @@ class Adaptive_Kalman_Filter():
         ax[1].semilogy()
         plt.show()
         
-#        x_hist      = self.plotParams[4]
-#        x_pre_hist  = self.plotParams[5]
-#        x_post_hist = self.plotParams[6]
-#        P_pre_hist  = self.plotParams[7]
-#        P_post_hist = self.plotParams[8]        
+#        x_hist      = self.plot_params[4]
+#        x_pre_hist  = self.plot_params[5]
+#        x_post_hist = self.plot_params[6]
+#        P_pre_hist  = self.plot_params[7]
+#        P_post_hist = self.plot_params[8]        
 #        # Plot the true, apriori, aposteriori states
 #        fig,ax = plt.subplots(n)
 #        for i in range(n):
@@ -395,35 +375,21 @@ class Adaptive_Kalman_Filter():
 #        plt.ylabel("Trace of error covariance")
         
 ###############################################################################
-###############################################################################
-###############################################################################
 
-def main():    
-    
-    # Close any existing figure
+if __name__ == '__main__':    
     plt.close('all')
-    npr.seed(2)
+    npr.seed(2)   
     
-    # Create the Adaptive_Kalman_Filter Class Object by initizalizng the required data
-    # covarianceSelectFlag = 1: Estimate both Q and R
-    # covarianceSelectFlag = 2: Estimate R alone, Q is already known
-    # covarianceSelectFlag = 3: Estimate Q alone, R is already known    
-    adaptiveKF = Adaptive_Kalman_Filter(maxIter=1000, covarianceSelectFlag = 1)
+    # Define problem parameters
+    dynamics_data_input, initial_condition = example_system()
+    unknown_params = UnknownParams(Q=False,R=True)
     
-    # Perform Adaptive_Kalman_Filter iteration and see convergence
-    adaptiveKF.GetDynamicsData()
-    adaptiveKF.AdaptiveKalmanFilterIteration()
+    # Initialize the adaptive Kalman filter
+    akf = AdaptiveKalmanFilter(dynamics_data_input, initial_condition, unknown_params, max_iter=1000)    
     
-    # Plot the Convergence of Covariance Estimates
-    adaptiveKF.PlotData()
-
-###############################################################################
-
-if __name__ == '__main__':
-    main()
+    # Perform adaptive Kalman filter iterations
+    akf.run()
     
-###############################################################################
-###############################################################################
-###################### END OF THE FILE ########################################
-###############################################################################
-###############################################################################
+    # Plot covariance estimates
+    akf.plot_data()
+   
