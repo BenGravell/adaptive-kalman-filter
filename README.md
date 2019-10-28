@@ -6,3 +6,10 @@ The filter is based on the work "Adaptive Kalman Filter for Detectable Linear Ti
 
 * Demo notebook (runs in-browser, no installation required)
   * [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/BenGravell/adaptive_kalman_filter/master?filepath=adaptive_kalman_filter_scalar_tiny_plot2.ipynb)
+
+## Package dependencies
+* NumPy
+* SciPy
+* Matplotlib
+* namedlist
+* RISE (for notebooks in slide presentation mode)
