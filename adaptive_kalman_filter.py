@@ -30,7 +30,7 @@ class AdaptiveKalmanFilter():
         self.m = self.H.shape[0]        
         self.x_mean0,self.x_covr0,self.Q_est0,self.R_est0,self.L0 = init_cond
         self.ell = self.check_observability()
-        self.p, self.Mopi, self.MopiMw = self.get_buffer_size()    
+        self.p, self.Mopi, self.kronA, self.kronB = self.get_buffer_size()
         self.unknown_params = unknown_params
                     
     def obsvp(self, p):
@@ -85,18 +85,51 @@ class AdaptiveKalmanFilter():
             p += 1
             Mo = self.obsvp(p)
         Mopi = la.pinv(Mo)
-        # Bulid the stacked H matrix as Mw
-        Mw = np.zeros([m*p,ell*(p-1)])
-        Mw[0:m,0:ell] = np.copy(H)        
-        for j in range(1,p-1):
-            Mw[0:m,ell*j:ell*(j+1)] = mdot(Mw[0:m,ell*(j-1):ell*j],F)
-        for i in range(1,p-1):
-            Mw[m*i:m*(i+1),ell*i:] = Mw[0:m,0:ell*(p-i-1)]            
-        # Product matrix: Mopi*Mw                
-        MopiMw = mdot(Mopi,Mw)
-        return p, Mopi, MopiMw
+
+        # Build the stacked H matrix as Mw
+        if p > 1:
+            Mw = np.zeros([m*p,ell*(p-1)])
+            Mw[0:m,0:ell] = np.copy(H)
+            for j in range(1,p-1):
+                Mw[0:m,ell*j:ell*(j+1)] = mdot(Mw[0:m,ell*(j-1):ell*j],F)
+            for i in range(1,p-1):
+                Mw[m*i:m*(i+1),ell*i:] = Mw[0:m,0:ell*(p-i-1)]
+
+            # Product matrix: Mopi*Mw
+            MopiMw = mdot(Mopi,Mw)
+
+            # Form the 'script' A matrix as Anew - Aold
+            Anew = np.hstack([MopiMw, np.eye(ell)])
+            Aold = np.hstack([np.zeros([ell,ell]),mdot(F,MopiMw)])
+            A = Anew - Aold
+
+            # Form the 'script' B matrix as Bnew - Bold
+            Bnew = np.hstack([Mopi,np.zeros([ell,m])])
+            Bold = np.hstack([np.zeros([ell,m]),mdot(F,Mopi)])
+            B = Bnew - Bold
+        else:
+            A = np.eye(ell)
+            B = np.hstack([Mopi, -mdot(F,Mopi)])
+
+        # Get the A_i and B_i sequences
+        Ai = np.zeros([p,ell,ell])
+        Bi = np.zeros([p+1,ell,m])
+        for i in range(p+1):
+            if i > 0:
+                Ai[p-i] = A[:,ell*(i-1):ell*(i)]
+            Bi[p-i] = B[:,m*(i):m*(i+1)]
+
+        # Form Kronecker products of the A_i's and B_i's
+        kronA = np.zeros([ell**2,ell**2])
+        kronB = np.zeros([ell**2,m**2])
+        for i in range(p+1):
+            if i < p:
+                kronA += np.kron(Ai[i],Ai[i])
+            kronB += np.kron(Bi[i],Bi[i])
+
+        return p, Mopi, kronA, kronB
         
-    def lse(self, kronA, kronB, L):
+    def lse(self, L):
         """
         Performs Least Squares Estimation with input data provided and returns 
         the least squares estimate        
@@ -106,7 +139,9 @@ class AdaptiveKalmanFilter():
         R = self.R
         n = self.n
         m = self.m
-        ell = self.ell      
+        ell = self.ell
+        kronA = self.kronA
+        kronB = self.kronB
         
         # Perform least-squares estimation
         Q_est = np.copy(Q) 
@@ -145,7 +180,6 @@ class AdaptiveKalmanFilter():
         ell     = self.ell
         p       = self.p       
         Mopi    = self.Mopi
-        MopiMw  = self.MopiMw
         x_mean0 = self.x_mean0
         x_covr0 = self.x_covr0        
         Q_est0  = self.Q_est0
@@ -196,37 +230,9 @@ class AdaptiveKalmanFilter():
                 
                 # Recursive covariance unbiased estimator
                 L = ((k-1)/k)*L + (1/k)*np.outer(Z,Z)  
-                                
-                # Form the 'script' A matrix as Anew - Aold
-                Anew = np.hstack([MopiMw, np.eye(ell)])
-                Aold = np.hstack([np.zeros([ell,ell]),mdot(F,MopiMw)])
-                A = Anew - Aold                 
-                Alr = np.fliplr(A)            
-                
-                # Form the 'script' B matrix as Bnew - Bold
-                Bnew = np.hstack([Mopi,np.zeros([ell,m])])
-                Bold = np.hstack([np.zeros([ell,m]),mdot(F,Mopi)])
-                B = Bnew - Bold
-                Blr = np.fliplr(B)
-                
-                # Get the A_i and B_i sequences
-                Ai = np.zeros([p,ell,ell])
-                Bi = np.zeros([p+1,ell,m])
-                for i in range(p+1):    
-                    if i < p:
-                        Ai[i] = Alr[:,ell*i:ell*(i+1)]
-                    Bi[i] = Blr[:,m*i:m*(i+1)] 
-                
-                # Form Kronecker producs of the A_i's and B_i's
-                kronA = np.zeros([ell**2,ell**2])
-                kronB = np.zeros([ell**2,m**2])            
-                for i in range(p+1):
-                    if i < p:
-                        kronA += np.kron(Ai[i],Ai[i])
-                    kronB += np.kron(Bi[i],Bi[i])
-                
+
                 # Get the least squares estimate of selected covariances
-                Q_est_new, R_est_new = self.lse(kronA, kronB, L)
+                Q_est_new, R_est_new = self.lse(L)
                 
                 # Check positive semidefiniteness of estimated covariances
                 if is_pos_def(Q_est_new):
@@ -315,35 +321,36 @@ def plot_data(akf,data_hist):
     ax[1].semilogx()
     ax[1].semilogy()
     ax[0].set_title("Noise covariance error vs time")
-    
-    # Plot the true, apriori, aposteriori states
-    fig,ax = plt.subplots(n)
-    for i in range(n):
-        ax[i].step(k_hist,x_hist[:,i])
-        ax[i].step(k_hist,x_pre_hist[:,i])
-        ax[i].step(k_hist,x_post_hist[:,i])
-        ax[i].set_ylabel("State %d"%(i+1))
-        ax[i].legend(["True","A priori","A posteriori"])
-    ax[-1].set_xlabel("Time index (k)")
-    ax[0].set_title("State vs time")
-    
-    # Plot the state estimation error
-    fig,ax = plt.subplots()
-    ax.step(k_hist,la.norm(x_hist-x_pre_hist,axis=1))
-    ax.step(k_hist,la.norm(x_hist-x_post_hist,axis=1))
-    ax.legend(["A priori","A posteriori"])
-    ax.set_xlabel("Time index (k)")
-    ax.set_ylabel("Norm of error")
-    plt.title("Actual error vs time")
-    
-    # Plot the assumed error covariance trace
-    fig,ax = plt.subplots()
-    plt.step(k_hist,np.trace(P_pre_hist,axis1=1,axis2=2))
-    plt.step(k_hist,np.trace(P_post_hist,axis1=1,axis2=2))
-    plt.legend(["A priori","A posteriori"])
-    plt.xlabel("Time index (k)")
-    plt.ylabel("Trace of error covariance")
-    plt.title("Assumed error vs time")
+
+    if T <= 1000:
+        # Plot the true, apriori, aposteriori states
+        fig,ax = plt.subplots(n)
+        for i in range(n):
+            ax[i].step(k_hist,x_hist[:,i])
+            ax[i].step(k_hist,x_pre_hist[:,i])
+            ax[i].step(k_hist,x_post_hist[:,i])
+            ax[i].set_ylabel("State %d"%(i+1))
+            ax[i].legend(["True","A priori","A posteriori"])
+        ax[-1].set_xlabel("Time index (k)")
+        ax[0].set_title("State vs time")
+
+        # Plot the state estimation error
+        fig,ax = plt.subplots()
+        ax.step(k_hist,la.norm(x_hist-x_pre_hist,axis=1))
+        ax.step(k_hist,la.norm(x_hist-x_post_hist,axis=1))
+        ax.legend(["A priori","A posteriori"])
+        ax.set_xlabel("Time index (k)")
+        ax.set_ylabel("Norm of error")
+        plt.title("Actual error vs time")
+
+        # Plot the assumed error covariance trace
+        fig,ax = plt.subplots()
+        plt.step(k_hist,np.trace(P_pre_hist,axis1=1,axis2=2))
+        plt.step(k_hist,np.trace(P_post_hist,axis1=1,axis2=2))
+        plt.legend(["A priori","A posteriori"])
+        plt.xlabel("Time index (k)")
+        plt.ylabel("Trace of error covariance")
+        plt.title("Assumed error vs time")
     
     plt.show()
 
@@ -369,7 +376,28 @@ def example_system():
     L      = np.zeros([3,3])
     
     return Dynamics(F,H,Q,R), InitCond(x_mean,x_covr,Q_est,R_est,L)
-        
+
+
+def example_system2():
+    # Linear time-invariant system dynamics
+    F = np.array([[0.8, 0.2],
+                  [0.3, 0.5]])
+    H = np.array([[1,0],
+                  [0,0.2]])
+    Q = np.array([[3.0, 0.2],
+                  [0.2, 2.0]])
+    R = np.array([[5,0],
+                  [0,4]])
+
+    # Initial estimates
+    x_mean = np.zeros(2)
+    x_covr = np.eye(2)
+    Q_est  = 20*np.eye(2)
+    R_est  = 10*np.eye(2)
+    L      = np.zeros([2,2])
+
+    return Dynamics(F,H,Q,R), InitCond(x_mean,x_covr,Q_est,R_est,L)
+
 
 if __name__ == '__main__':    
     # Initialize the session
@@ -377,14 +405,16 @@ if __name__ == '__main__':
     npr.seed(1)   
     
     # Define problem parameters
-    dynamics, init_cond = example_system()
-    unknown_params = UnknownParams(Q=True, R=False)
+    # dynamics, init_cond = example_system()
+    dynamics, init_cond = example_system2()
+    unknown_params = UnknownParams(Q=False, R=True)
+    # unknown_params = UnknownParams(Q=True, R=False)
     
     # Initialize the adaptive Kalman filter
     akf = AdaptiveKalmanFilter(dynamics, init_cond, unknown_params)    
     
     # Perform adaptive Kalman filter iterations
-    data_hist = akf.run(T=1000)
+    data_hist = akf.run(T=10000)
     
     # Plot covariance estimates
     plot_data(akf,data_hist)
