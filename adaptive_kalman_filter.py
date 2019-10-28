@@ -407,7 +407,7 @@ if __name__ == '__main__':
     # Define problem parameters
     # dynamics, init_cond = example_system()
     dynamics, init_cond = example_system2()
-    unknown_params = UnknownParams(Q=False, R=True)
+    unknown_params = UnknownParams(Q=True, R=True)
     # unknown_params = UnknownParams(Q=True, R=False)
     
     # Initialize the adaptive Kalman filter
