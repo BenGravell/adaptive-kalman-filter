@@ -28,13 +28,13 @@ class AdaptiveKalmanFilter():
         T:              Integer of maximum filter iterations
         """
         self.F, self.H, self.Q, self.R = dynamics
-        self.n = self.F.shape[0]
-        self.m = self.H.shape[0]        
-        self.x_mean0, self.x_covr0 = init_cond
-        self.ell = self.check_observability()
-        self.p, self.Mopi = self.get_buffer_size()    
-        self.T = T 
-        self.unknown_params = unknown_params
+        self.n                         = self.F.shape[0]
+        self.m                         = self.H.shape[0]        
+        self.x_mean0, self.x_covr0     = init_cond
+        self.ell                       = self.check_observability()
+        self.p, self.Mopi              = self.get_buffer_size()    
+        self.T                         = T 
+        self.unknown_params            = unknown_params
                     
     def obsvp(self, p):
         """
@@ -122,8 +122,7 @@ class AdaptiveKalmanFilter():
             S         = np.copy(kronA)
             vecCV     = mdot(kronB,vec(R))
             vecQ_est  = mdot(la.pinv(S),vec(L)-vecCV)
-            Q_est = np.reshape(vecQ_est,[n,n])  
-            
+            Q_est = np.reshape(vecQ_est,[n,n])              
         return LeSqOut(Q_est, R_est) 
     
     
@@ -384,7 +383,7 @@ if __name__ == '__main__':
     
     # Define problem parameters
     dynamics, init_cond = example_system()
-    unknown_params = UnknownParams(Q=False, R=True)
+    unknown_params = UnknownParams(Q=True, R=False)
     
     # Initialize the adaptive Kalman filter
     akf = AdaptiveKalmanFilter(dynamics, init_cond, unknown_params, T=10000)    
