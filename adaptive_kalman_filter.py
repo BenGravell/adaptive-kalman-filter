@@ -13,7 +13,7 @@ UnknownParams = namedlist("UnknownParams", "Q, R")
 DataHist = namedlist("DataHist","T Q_est R_est x x_pre x_post P_pre P_post")
 
 
-class AdaptiveKalmanFilter():
+class AdaptiveKalmanFilter:
     """
     Class representing operations & data needed to perform adaptive KF updates
     """
@@ -116,8 +116,8 @@ class AdaptiveKalmanFilter():
         Bi = np.zeros([p+1,ell,m])
         for i in range(p+1):
             if i > 0:
-                Ai[p-i] = A[:,ell*(i-1):ell*(i)]
-            Bi[p-i] = B[:,m*(i):m*(i+1)]
+                Ai[p-i] = A[:,ell*(i-1):ell*i]
+            Bi[p-i] = B[:,m*i:m*(i+1)]
 
         # Form Kronecker products of the A_i's and B_i's
         kronA = np.zeros([ell**2,ell**2])
